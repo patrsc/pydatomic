@@ -73,17 +73,3 @@ The following value types are currently **not** supported:
 ## Disclaimer
 
 Datomic® is a registered trademark of Cognitect, Inc. **The author(s) of this software is/are not affiliated with Cognitect or Datomic.** The trademarks DATOMIC® and COGNITECT™ and related rights are the sole property of Cognitect, Inc. http://cognitect.com/
-
-# Installation
-
-Start an instance of [MongoDB](https://www.mongodb.com/) using [Docker](https://www.docker.com/) (or use [other ways](https://www.mongodb.com/docs/manual/installation/) to install MongoDB):
-
-```sh
-docker run --name my-mongo -p 27017:27017 -v ~/mongodb-data:/data/db -d mongo:4.4-focal
-```
-
-Pydatomic requires Python 3.9 or above. You can install the package `pydatomic` using `pip`:
-
-```sh
-pip install pydatomic
-```

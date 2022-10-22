@@ -1,7 +1,8 @@
 """
 Python client for emulating a Datomic database system using MongoDB as storage backend.
 
-.. include:: ../pydatomic.md
+.. include:: ../doc/introduction.md
+.. include:: ../doc/installation.md
 
 # Usage
 
@@ -9,7 +10,7 @@ The following example script shows the basic usage. You can use [MongoDB Compass
 to interactively inspect the database content (best in table view).
 
 ```py
-.. include:: ../pydatomic_test.py
+.. include:: ../example.py
 ```
 
 # Public API
