@@ -13,6 +13,12 @@ dependencies = [
 requires-python = ">=3.9"
 readme = "README.md"
 license = {text = "MIT"}
+
+[project.urls]
+Homepage = "https://pydatomic.github.io"
+Repository = "https://github.com/patrsc/pydatomic"
+Documentation = "https://pydatomic.github.io"
+
 [project.optional-dependencies]
 
 [build-system]
