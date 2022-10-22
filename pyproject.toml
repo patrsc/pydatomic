@@ -1,0 +1,26 @@
+[project]
+name = "pydatomic"
+version = "0.1.0"
+description = "Python client for emulating a Datomic database system using MongoDB as storage backend"
+authors = [
+    {name = "Patrick", email = "patrsc@nubu.at"},
+]
+dependencies = [
+    "pymongo>=4.3.2",
+    "rfc3986>=2.0.0",
+]
+requires-python = ">=3.9"
+readme = "README.md"
+license = {text = "MIT"}
+[project.optional-dependencies]
+
+[build-system]
+requires = ["pdm-pep517>=1.0.0"]
+build-backend = "pdm.pep517.api"
+
+[tool]
+[tool.pdm]
+[tool.pdm.dev-dependencies]
+dev = [
+    "pdoc>=12.2.0",
+]
