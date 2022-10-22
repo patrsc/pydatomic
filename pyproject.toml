@@ -16,8 +16,9 @@ license = {text = "MIT"}
 
 [project.urls]
 Homepage = "https://pydatomic.github.io"
-Repository = "https://github.com/patrsc/pydatomic"
 Documentation = "https://pydatomic.github.io"
+Source = "https://github.com/patrsc/pydatomic"
+Tracker = "https://github.com/patrsc/pydatomic/issues"
 
 [project.optional-dependencies]
 
