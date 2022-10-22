@@ -17,5 +17,4 @@ to interactively inspect the database content (best in table view).
 from .core import Client, Connection, Database
 from .facts import Facts, Datom
 
-__version__ = "0.1.0"
 __all__ = ['Client', 'Connection', 'Database', 'Facts', 'Datom']
