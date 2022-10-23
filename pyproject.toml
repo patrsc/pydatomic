@@ -1,6 +1,6 @@
 [project]
 name = "pydatomic"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python client for emulating a Datomic database system using MongoDB as storage backend"
 authors = [
     {name = "Patrick", email = "patrsc@nubu.at"},
