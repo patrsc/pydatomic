@@ -27,7 +27,7 @@ Pydatomic shares the same understanding as Datomic with the following concepts:
 * Entities
 * Schema
 * Time Model
-* Identity (with the limitation that *db/id* is not a supported waw to refer to an entity)
+* Identity (with the limitation that *db/id* is not a supported way to refer to an entity)
 * Uniqueness (with the limitation that currently *db.unique/identity* and *db.unique/value* have the same semantics)
 * Lookup Refs (a list with `[attribute, value]` to identify an entity)
 
