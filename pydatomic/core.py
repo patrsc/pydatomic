@@ -16,7 +16,7 @@ class Client:
     def __init__(self, uri: str = default_uri) -> None:
         """create a new Client object
         
-        :param uri: the URL to the database server
+        :param uri: the URI to the MongoDB server
         :return: the Client object
         """
         self._uri = uri
@@ -75,13 +75,13 @@ class Connection:
         self._datoms = self._client._client[db_name]['datoms']
 
     def db(self) -> 'Database':
-        """returns the current database value on the server"""
+        """returns the current database value (the latest database on the server)"""
         d = self._datoms.find_one({'$query': {}, '$orderby': {'tx': -1}})
         tx_max = -1 if d is None else d['tx']
         r = RemoteDatabase(self, tx_max)
         return Database(remote=r, tx_min=-1, with_tx=None, full_history=False)
     
-    def transact(self, facts: Facts):
+    def transact(self, facts: Facts) -> tuple['Database', 'Database', list[Datom], dict[str,int]]:
         """transact a new set of facts to the database on the server
 
         :param facts: the set of facts to be transacted
@@ -102,7 +102,7 @@ class Connection:
         return db_before, db_after, tx_data, temp_ids
 
 class Database:
-    """Represents a database value"""
+    """represents a database value"""
 
     def __init__(self, remote: Optional['RemoteDatabase'] = None, tx_min: int = -1, with_tx: Optional['LocalTransactionList'] = None, full_history=False) -> None:
         """create a new Database object from scratch (use this only without arguments to create a new standalone database
@@ -147,12 +147,12 @@ class Database:
         return v
 
     def entities(self):
-        """get an Iterable over all entity ids (int values)"""
+        """get an Iterable over all entity IDs (int values)"""
         e_max = self._get_max_entity_id()
         return range(0, e_max+1)
 
     def transaction_at(self, time: Union[int, datetime, str]) -> int:
-        """get highest transaction id (tx_id) that existed at the given timestamp
+        """get highest transaction ID (tx_id) that existed at the given timestamp
         :param time: a timestamp represented as int (milliseconds since epoch at UTC), datetime or string in ISO format
         :return: the entity ID of the transaction suitable for passing to functions such as Database.as_of, Database.since
         """
@@ -238,9 +238,9 @@ class Database:
         return e, names, max_entity
 
     def as_of(self, tx_id) -> 'Database':
-        """returns a database value from the beginning until a point in time represented by a transation id
-        :param tx_id: the transaction id (inclusive)
-        :return: the database value
+        """returns a database value from the beginning until a point in time represented by a transaction ID
+        :param tx_id: the transaction ID (inclusive)
+        :return: the database value with transactions tx <= tx_id
         """
         if tx_id > self._tx_max:
             raise ValueError('cannot travel into the future')
@@ -255,20 +255,23 @@ class Database:
         return Database(remote=r, tx_min=-1, with_tx=tx, full_history=False)
 
     def since(self, tx_id) -> 'Database':
-        """returns a database value after a point in time represented by a transation id
-        :param tx_id: the transaction id (exclusive)
-        :return: the database value
+        """returns a database value after a point in time represented by a transaction ID
+        :param tx_id: the transaction ID (exclusive)
+        :return: the database value with transactions tx > tx_id
         """
         return Database(remote=self._remote, tx_min=tx_id, with_tx=self._with_tx, full_history=False)
 
     def history(self) -> 'Database':
-        """returns a history database value of the current database value
-        :return: the database value
+        """returns a history database value of the given database value
+        (currently history has no effect, since complex queries are not implemented yet; 
+        to get all historic facts the functions Database.facts and Database.all_facts can be used on both history databases and normal databases)
+        :return: the database value with history
         """
         return Database(remote=self._remote, tx_min=self._tx_min, with_tx=self._with_tx, full_history=True)
 
-    def as_if(self, facts: Facts):
-        """returns a database value with added facts that are not transacted to a remote database, but only visible locally
+    def as_if(self, facts: Facts) -> tuple['Database', 'Database', list[Datom], dict[str,int]]:
+        """returns a database value with added facts that are not transacted to a remote database, 
+        but only visible locally (this function is called `with` in Datomic)
 
         This function has the same interface as Connection.transact"""
         db_before = Database(remote=self._remote, tx_min=-1, with_tx=self._with_tx, full_history=False)
@@ -310,8 +313,10 @@ class Database:
         raise NotImplementedError()
 
     def find(self, criteria: dict[str, Any]) -> dict[int, dict[str, Any]]:
-        """find entities based on attribute values (entities that fulfill al criteria are returned, 
-        if a criteria value is None any attribute value will match)"""
+        """find entities based on attribute values
+        :param criteria: dict of attribute/value pairs that must all be fulfilled, if value is None any attribute value will match
+        :return: result dict with key being the entity ID and value being the entity value as dict in the same form as returned by Database.get
+        """
         results = {}
         if criteria == {}:
             # return all entities
@@ -341,9 +346,12 @@ class Database:
         results = candidates
         return results
 
-    def get(self, entity: Union[int, list]):
-        """get all current facts of an entity: dict[attribute->value],
-        if an attribute has cardinality many, then value will be a list"""
+    def get(self, entity: Union[int, list]) -> dict[str, Any]:
+        """get all current facts of an entity as dict attribute->value
+        :param entity: the entity ID as int or lookup ref [attribute, value]
+        :return: dict containing current attribute/value pairs, if an attribute has 
+        cardinality many, then the value will be a list
+        """
         facts = self.facts(entity)
         active_facts = []
         for f in facts:
@@ -368,7 +376,10 @@ class Database:
         return d
 
     def facts(self, entity: Union[int,list]) -> list[Datom]:
-        """get all historic facts about an entity as a list of Datom"""
+        """get all historic facts about an entity as a list of datoms
+        :param entity: the entity ID as int or lookup ref [attribute, value]
+        :return: list of pydatomic.Datom elements containing all historic facts about the entity
+        """
         if isinstance(entity, list):
             entity = self._lookup(entity[0], entity[1])
         if entity < 0:
@@ -388,7 +399,9 @@ class Database:
         return facts
 
     def all_facts(self) -> list[Datom]:
-        """get all historic facts in the database"""
+        """get all historic facts in the database
+        :return: list of pydatomic.Datom elements containing all historic facts in the database
+        """
         facts = []
         for e in self.entities():
             f = self.facts(e)
@@ -410,9 +423,12 @@ class Database:
     def __repr__(self):
         return self.__str__()
 
-    def states(self, entity: Union[int, list]):
-        """get all historic states of an entity as a dict[tx->dict[attribute->value]],
-        transactions that do not modify the given identity will be omitted
+    def states(self, entity: Union[int, list]) -> dict[int, dict[str, Any]]:
+        """get all historic states of an entity as a dict: tx->dict[attribute->value],
+        transactions that do not modify the given entity will be omitted
+        :param entity: the entity ID as int or lookup ref [attribute, value]
+        :return: a dict with keys the transaction IDs and values the state of the entity 
+        as of this transaction (as returned by Database.get)
         """
         facts = self.facts(entity)
         states = {}

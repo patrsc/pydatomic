@@ -14,6 +14,9 @@ to interactively inspect the database content (best in table view).
 ```
 
 # Public API
+
+The public API is inspired by the Clojure 
+[Datomic Client API](https://docs.datomic.com/client-api/datomic.client.api.html).
 """
 from .core import Client, Connection, Database
 from .facts import Facts, Datom
