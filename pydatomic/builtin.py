@@ -129,19 +129,12 @@ class Attr(BaseModel):
     @staticmethod
     def builtin():
         """returns a list of builtin attributes"""
-        return [
-            Attr(ident='db/txInstant', value_type=ValueType.instant, cardinality=Cardinality.one),
-            Attr(ident='db/ident', value_type=ValueType.keyword, cardinality=Cardinality.one, unique=Unique.identity),
-            Attr(ident='db/valueType', value_type=ValueType.keyword, cardinality=Cardinality.one, restricted_values=ValueType.values()),
-            Attr(ident='db/cardinality',value_type=ValueType.keyword, cardinality=Cardinality.one, restricted_values=Cardinality.values()),
-            Attr(ident='db/unique', value_type=ValueType.keyword, cardinality=Cardinality.one, restricted_values=Unique.values()),
-            Attr(ident='db/doc', value_type=ValueType.string, cardinality=Cardinality.one),
-        ]
+        return builtin_attr
     
     @staticmethod
     def builtin_dict():
         """returns a dict of builtin attributes"""
-        return {a.ident: a for a in Attr.builtin()}
+        return builtin_attr_dict
 
     @staticmethod
     def from_dict(dct):
@@ -242,3 +235,15 @@ def is_valid_lowercase_uuid(value: str):
 def validate_uri(value: str):
     if not is_valid_uri(value):
         raise ValueError(f'the value {value!r} is not a valid URI')
+
+
+# Module-level variables for performance
+builtin_attr = [
+    Attr(ident='db/txInstant', value_type=ValueType.instant, cardinality=Cardinality.one),
+    Attr(ident='db/ident', value_type=ValueType.keyword, cardinality=Cardinality.one, unique=Unique.identity),
+    Attr(ident='db/valueType', value_type=ValueType.keyword, cardinality=Cardinality.one, restricted_values=ValueType.values()),
+    Attr(ident='db/cardinality',value_type=ValueType.keyword, cardinality=Cardinality.one, restricted_values=Cardinality.values()),
+    Attr(ident='db/unique', value_type=ValueType.keyword, cardinality=Cardinality.one, restricted_values=Unique.values()),
+    Attr(ident='db/doc', value_type=ValueType.string, cardinality=Cardinality.one),
+]
+builtin_attr_dict = {a.ident: a for a in builtin_attr}

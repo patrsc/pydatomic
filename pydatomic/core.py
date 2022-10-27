@@ -1,6 +1,6 @@
 from pymongo import MongoClient, InsertOne
 from fastapi.encoders import jsonable_encoder
-from typing import Optional, Union, Any
+from typing import Optional, Union, Any, Iterable
 from .facts import Facts, Datom
 from .util import now, datetime, datetime_to_int
 from .builtin import Attr, Cardinality, ValueType, Unique
@@ -114,6 +114,7 @@ class Database:
         self._tx_min = tx_min  # exclusive: tx > tx_min
         self._with_tx = with_tx  # transaction ids monotonically increasing
         self._full_history = full_history
+        self._attr_def_cache = {}  # cache of attributes for performance
 
     @property
     def _remote_tx_max(self):
@@ -299,12 +300,21 @@ class Database:
         if name in builtin_attr:
             attr_def = builtin_attr[name]
         else:
-            try:
-                e = self._lookup('db/ident', name)
-            except EntityNotFoundError:
-                raise ValueError(f'attribute {name!r} is not defined')
-            dct = self.get(e)
-            attr_def = Attr.from_dict(dct)
+            if len(self._attr_def_cache) == 0:
+                # init attr cache
+                result = self.find({'db/ident': None})
+                for _, d in result.items():
+                    self._attr_def_cache[d['db/ident']] = Attr.from_dict(d)
+            if name in self._attr_def_cache:
+                attr_def = self._attr_def_cache[name]
+            else:
+                try:
+                    e = self._lookup('db/ident', name)
+                except EntityNotFoundError:
+                    raise ValueError(f'attribute {name!r} is not defined')
+                dct = self.get(e)
+                attr_def = Attr.from_dict(dct)
+                self._attr_def_cache[name] = attr_def
         return attr_def
 
     def query(self, q):
@@ -329,9 +339,11 @@ class Database:
             val = criteria[attr]
             candidate_datoms = self._find_attribute_value(attr, val)
             candidate_entities = [f.e for f in candidate_datoms]
+            candidate_datoms_all = self._facts_multi_entity(candidate_entities)
             candidates = {}
             for e in candidate_entities:
-                candidates[e] = self.get(e)
+                entity_datoms = [f for f in candidate_datoms_all if f.e == e]
+                candidates[e] = self._get_from_facts(entity_datoms)
             results = self._filter_candidates(candidates, criteria)
         return results
     
@@ -353,6 +365,9 @@ class Database:
         cardinality many, then the value will be a list
         """
         facts = self.facts(entity)
+        return self._get_from_facts(facts)
+
+    def _get_from_facts(self, facts: list[Datom]):
         active_facts = []
         for f in facts:
             if f.op:
@@ -384,17 +399,19 @@ class Database:
             entity = self._lookup(entity[0], entity[1])
         if entity < 0:
             return []
+        return self._facts_multi_entity([entity])
 
+    def _facts_multi_entity(self, entities: Iterable):
         facts = []
         if self._remote is not None:
             r = self._remote
             tx_max = r._tx_max
-            lst = r._conn._datoms.find({'e': entity, 'tx': {'$lte': tx_max}})
+            lst = r._conn._datoms.find({'e': {'$in': list(entities)}, 'tx': {'$lte': tx_max}})
             for d in lst:
                 facts.append(ValueType.mongo_decode(d))
 
         for f in self._with_tx.facts():
-            if f.e == entity:
+            if f.e in entities:
                 facts.append(f)
         return facts
 
@@ -402,10 +419,7 @@ class Database:
         """get all historic facts in the database
         :return: list of pydatomic.Datom elements containing all historic facts in the database
         """
-        facts = []
-        for e in self.entities():
-            f = self.facts(e)
-            facts.extend(f)
+        facts = self._facts_multi_entity(self.entities())
         return sorted(facts)
 
     def __str__(self):
