@@ -1,6 +1,6 @@
 from pymongo import MongoClient, InsertOne
 from fastapi.encoders import jsonable_encoder
-from typing import Optional, Union, Any, Iterable
+from typing import Collection, Optional, Union, Any
 from .facts import Facts, Datom
 from .util import now, datetime, datetime_to_int
 from .builtin import Attr, Cardinality, ValueType, Unique
@@ -115,6 +115,8 @@ class Database:
         self._with_tx = with_tx  # transaction ids monotonically increasing
         self._full_history = full_history
         self._attr_def_cache = {}  # cache of attributes for performance
+        self._attr_index = {}  # cached datoms grouped by attribute: {a->AttributeIndex([datom where datom.a==a])}
+        self._entity_index = {}  # cached datoms grouped by entity: {e->EntityIndex([datom where datom.e==e])}  TODO: not yet implemented
 
     @property
     def _remote_tx_max(self):
@@ -167,24 +169,31 @@ class Database:
                 tx_id = f.tx
         return tx_id
 
-    def _find_attribute_value(self, attribute: str, value: Any) -> list[Datom]:
-        """return all facts with given (attribute, value) pair, if value is None it finds the attribute with any value"""
+    def _get_attr_index(self, attribute: str):
         facts = []
-        attr_def = self._get_attr_def(attribute)
         if self._remote is not None:
             r = self._remote
             tx_max = r._tx_max
-            if value is None:
-                docs = r._conn._datoms.find({'a': attribute, 'tx': {'$lte': tx_max}})
-            else:
-                value_mongo = attr_def.value_type.mongo_encode_value(value)
-                docs = r._conn._datoms.find({'a': attribute, 'v': value_mongo, 'tx': {'$lte': tx_max}})
+            docs = r._conn._datoms.find({'a': attribute, 'tx': {'$lte': tx_max}})
             for d in docs:
                 facts.append(ValueType.mongo_decode(d))
         for f in self._with_tx.facts():
-            match = f.a == attribute and (value is None or f.v == value)
+            match = f.a == attribute
             if match:
                 facts.append(f)
+        return AttributeIndex(facts)
+
+    def _find_attribute_value(self, attribute: str, value: Any) -> list[Datom]:
+        """return all facts with given (attribute, value) pair, if value is None it finds the attribute with any value"""
+        if attribute not in self._attr_index:
+            # add attribute to index for fast future attribute lookup
+            self._attr_index[attribute] = self._get_attr_index(attribute)
+        # use index to filter attribute datoms
+        index: AttributeIndex = self._attr_index[attribute]
+        if value is None:
+            facts = index.facts.copy()
+        else:
+            facts = index.facts_where(value)
         return facts
 
     def _lookup(self, attribute, value) -> int:
@@ -401,7 +410,9 @@ class Database:
             return []
         return self._facts_multi_entity([entity])
 
-    def _facts_multi_entity(self, entities: Iterable):
+    def _facts_multi_entity(self, entities: Collection):
+        if len(entities) == 0:
+            return []
         facts = []
         if self._remote is not None:
             r = self._remote
@@ -519,3 +530,21 @@ class LocalTransactionList:
 
     def range(self, start: int, stop: int) -> 'LocalTransactionList':
         return LocalTransactionList(self._tx[start:stop])
+
+
+class AttributeIndex:
+    def __init__(self, facts):
+        self.facts = facts  # all facts about a single attribute
+        self.values = {}  # dict of values mapping to indices in facts where the value occurs
+        for i, f in enumerate(facts):
+            if f.v not in self.values:
+                self.values[f.v] = []
+            self.values[f.v].append(i)
+
+    def facts_where(self, value):
+        """return the facts where f.v == value"""
+        if value in self.values:
+            facts = [self.facts[i] for i in self.values[value]]
+        else:
+            facts = []
+        return facts
