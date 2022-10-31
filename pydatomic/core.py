@@ -477,7 +477,7 @@ class LocalTransaction:
         self._datoms: list[Datom] = tx_data
     
     def tx_id(self):
-        self._datoms[0].tx
+        return self._datoms[0].tx
 
     def facts(self):
         """iterate over datoms"""
