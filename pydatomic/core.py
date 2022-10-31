@@ -3,7 +3,7 @@ from fastapi.encoders import jsonable_encoder
 from typing import Collection, Optional, Union, Any
 from .facts import Facts, Datom
 from .util import now, datetime, datetime_to_int
-from .builtin import Attr, Cardinality, ValueType, Unique
+from .builtin import Attr, Cardinality, ValueType
 from .exceptions import EntityNotFoundError
 
 
@@ -199,16 +199,20 @@ class Database:
     def _lookup(self, attribute, value) -> int:
         """get entity id of an entity with a unique attribute"""
         attr_def = self._get_attr_def(attribute)
-        if attr_def.unique not in [Unique.identity, Unique.val]:
+        if not attr_def.is_unique():
             raise ValueError(f'lookup failed because attribute {attribute!r} is not unique')
 
-        facts = self._find_attribute_value(attribute, value)
-        candidates = set(f.e for f in facts)
-        for e in candidates:
-            d = self.get(e)
+        e = self._lookup_direct(attribute, value)
+        if e is None:
+            raise EntityNotFoundError(f'no entity found with attribute {attribute!r} set to {value!r}')
+        return e
+    
+    def _lookup_direct(self, attribute, value) -> Optional[int]:
+        candidates = self._find_candidates(attribute, value)
+        for e, d in candidates.items():
             if attribute in d and d[attribute] == value:
                 return e
-        raise EntityNotFoundError(f'no entity found with attribute {attribute!r} set to {value!r}')
+        return None
 
     def _transaction_data(self, facts: Facts) -> tuple[list[Datom], dict[str,int]]:
         max_entity = self._get_max_entity_id()
@@ -298,8 +302,14 @@ class Database:
             db = Database(remote=self._remote, tx_min=-1, with_tx=tx, full_history=False)
             # given db, check if is adding datom is a valid operation
             attr_def = db._get_attr_def(datom.a)
-            attr_def.validate_value(datom.v, db)
-            attr_def.validate_cardinality(datom.e, datom.v, db, datom.op)
+            attr_def.validate_value(datom.v)
+            if attr_def.is_ref():
+                d = db.get(datom.v)
+                if d == {}:
+                    raise ValueError(f'entity {datom.v} does not exist: a reference must point to a valid entity that has at least one attribute set')
+            data = db.get(datom.e)
+            existing_value = None if datom.a not in data else data[datom.a]
+            attr_def.validate_cardinality(datom.e, datom.v, datom.op, existing_value)
             attr_def.validate_uniqueness(datom.v, db, datom.op)
             lst.append(attr_def.value_type.mongo_encode(datom))
         return lst
@@ -346,19 +356,23 @@ class Database:
         else:
             attr = list(criteria.keys())[0]
             val = criteria[attr]
-            candidate_datoms = self._find_attribute_value(attr, val)
-            candidate_entities = [f.e for f in candidate_datoms]
-            candidate_datoms_all = self._facts_multi_entity(candidate_entities)
-            candidate_datoms_all_by_e = {}
-            for f in candidate_datoms_all:
-                if f.e not in candidate_datoms_all_by_e:
-                    candidate_datoms_all_by_e[f.e] = []
-                candidate_datoms_all_by_e[f.e].append(f)
-            candidates = {}
-            for e in candidate_entities:
-                candidates[e] = self._get_from_facts(candidate_datoms_all_by_e[e])
+            candidates = self._find_candidates(attr, val)
             results = self._filter_candidates(candidates, criteria)
         return results
+
+    def _find_candidates(self, attr, val):
+        candidate_datoms = self._find_attribute_value(attr, val)
+        candidate_entities = set(f.e for f in candidate_datoms)
+        candidate_datoms_all = self._facts_multi_entity(candidate_entities)
+        candidate_datoms_all_by_e = {}
+        for f in candidate_datoms_all:
+            if f.e not in candidate_datoms_all_by_e:
+                candidate_datoms_all_by_e[f.e] = []
+            candidate_datoms_all_by_e[f.e].append(f)
+        candidates = {}
+        for e in candidate_entities:
+            candidates[e] = self._get_from_facts(candidate_datoms_all_by_e[e])
+        return candidates
     
     @staticmethod
     def _filter_candidates(candidates, criteria):

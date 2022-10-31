@@ -6,7 +6,6 @@ from .facts import Datom
 from bson.int64 import Int64
 from fastapi.encoders import jsonable_encoder
 from .util import datetime, int_to_datetime, datetime_to_int
-from .exceptions import EntityNotFoundError
 import uuid
 from rfc3986 import is_valid_uri
 from datetime import timezone
@@ -47,17 +46,13 @@ class ValueType(Enum):
     def to_dict():
         return {v.value.name: v for v in ValueType}
 
-    def validate_type(self, value: Any, attribute_name: str, db):
+    def validate_type(self, value: Any, attribute_name: str):
         """validate that given value has correct value type"""
         pt = self.value.python_type
         if not isinstance(value, pt):
             raise ValueError(f'the attribute {attribute_name!r} has value type {self.value.name!r}, expected Pyton type is {pt.__name__}, got {type(value).__name__} instead')
         if self == ValueType.keyword:
             validate_keyword(value)
-        elif self == ValueType.ref:
-            d = db.get(value)
-            if d == {}:
-                raise ValueError(f'entity {value} does not exist: a reference must point to a valid entity that has at least one attribute set')
         elif self == ValueType.uuid:
             validate_uuid(value)
         elif self == ValueType.uri:
@@ -148,52 +143,52 @@ class Attr(BaseModel):
         vt = ValueType.to_dict()[dct['db/valueType']]
         return Attr(ident=name, value_type=vt, cardinality=dct['db/cardinality'], unique=u, doc=d)
 
-    def validate_value(self, value: Any, db):
-        self.value_type.validate_type(value, self.ident, db)
+    def validate_value(self, value: Any):
+        self.value_type.validate_type(value, self.ident)
         self.validate_restricted_values(value)
+
+    def is_ref(self):
+        return self.value_type == ValueType.ref
+
+    def is_unique(self):
+        return self.unique in [Unique.identity, Unique.val]
 
     def validate_restricted_values(self, value: Any):
         if self.restricted_values is not None:
             if not (isinstance(value, str) and value in self.restricted_values):
                 raise ValueError(f'the attribute {self.ident!r} must be one of the values {set(self.restricted_values)}, got {value!r} instead')
 
-    def validate_cardinality(self, e: int, value: Any, db, op: bool):
+    def validate_cardinality(self, e: int, value: Any, op: bool, existing_value):
         """validate cardinality (considering all retracted facts)"""
-        data = db.get(e)
         if op:
             # fact is added
             if self.cardinality == Cardinality.one:
                 # if cardinality is one, the entity e cannot have the attribute set to any value
-                if self.ident in data:
+                if existing_value is not None:
                     raise ValueError(f'cannot add attribute {self.ident!r} of entity {e}: a value is already set (cardinality is one)')
             else:
                 # if cardinality is many, the entity e cannot have the attribute set to the given value
-                if self.ident in data:
-                    values = set(data[self.ident])
+                if existing_value is not None:
+                    values = set(existing_value)
                     if value in values:
                         raise ValueError(f'cannot add attribute {self.ident!r} of entity {e}: the value {value!r} is already present (cardinality is many)')
         else:
             # fact is retracted
             if self.cardinality == Cardinality.one:
                 # if cardinality is one, the entity e must have the attribute set to the given value
-                if self.ident not in data or data[self.ident] != value:
+                if existing_value is None or existing_value != value:
                     raise ValueError(f'cannot remove attribute {self.ident!r} of entity {e}: the value {value!r} is not set (cardinality is one)')
             else:
                 # if cardinality is many, the entity e must have the given value in its set of values
-                if self.ident not in data or value not in set(data[self.ident]):
+                if existing_value is None or value not in set(existing_value):
                     raise ValueError(f'cannot remove attribute {self.ident!r} of entity {e}: the value {value!r} is not set (cardinality is many)')
 
     def validate_uniqueness(self, value: Any, db, op: bool):
         """validate uniqueness (considering all retracted facts)"""
-        if op and self.unique in [Unique.identity, Unique.val]:
+        if op and self.is_unique():
             # no other entity can have this attribute set to the given value
-            try:
-                e = db._lookup(self.ident, value)
-                found = True
-            except EntityNotFoundError:
-                e = None
-                found = False
-            if found:
+            e = db._lookup_direct(self.ident, value)
+            if e is not None:
                 raise ValueError(f'cannot set unique attribute {self.ident!r} to {value!r}, because this value is already assigned to entity {e}')
 
 
