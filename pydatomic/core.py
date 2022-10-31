@@ -349,10 +349,14 @@ class Database:
             candidate_datoms = self._find_attribute_value(attr, val)
             candidate_entities = [f.e for f in candidate_datoms]
             candidate_datoms_all = self._facts_multi_entity(candidate_entities)
+            candidate_datoms_all_by_e = {}
+            for f in candidate_datoms_all:
+                if f.e not in candidate_datoms_all_by_e:
+                    candidate_datoms_all_by_e[f.e] = []
+                candidate_datoms_all_by_e[f.e].append(f)
             candidates = {}
             for e in candidate_entities:
-                entity_datoms = [f for f in candidate_datoms_all if f.e == e]
-                candidates[e] = self._get_from_facts(entity_datoms)
+                candidates[e] = self._get_from_facts(candidate_datoms_all_by_e[e])
             results = self._filter_candidates(candidates, criteria)
         return results
     
