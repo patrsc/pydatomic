@@ -183,14 +183,6 @@ class Attr(BaseModel):
                 if existing_value is None or value not in set(existing_value):
                     raise ValueError(f'cannot remove attribute {self.ident!r} of entity {e}: the value {value!r} is not set (cardinality is many)')
 
-    def validate_uniqueness(self, value: Any, db, op: bool):
-        """validate uniqueness (considering all retracted facts)"""
-        if op and self.is_unique():
-            # no other entity can have this attribute set to the given value
-            e = db._lookup_direct(self.ident, value)
-            if e is not None:
-                raise ValueError(f'cannot set unique attribute {self.ident!r} to {value!r}, because this value is already assigned to entity {e}')
-
 
 def validate_keyword(value: str):
     """

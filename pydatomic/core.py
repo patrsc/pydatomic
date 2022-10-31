@@ -208,7 +208,7 @@ class Database:
         return e
     
     def _lookup_direct(self, attribute, value) -> Optional[int]:
-        candidates = self._find_candidates(attribute, value)
+        candidates = self._find_candidates(attribute, value, return_all_attributes=False)
         for e, d in candidates.items():
             if attribute in d and d[attribute] == value:
                 return e
@@ -310,7 +310,11 @@ class Database:
             data = db.get(datom.e)
             existing_value = None if datom.a not in data else data[datom.a]
             attr_def.validate_cardinality(datom.e, datom.v, datom.op, existing_value)
-            attr_def.validate_uniqueness(datom.v, db, datom.op)
+            if datom.op and attr_def.is_unique():
+                # no other entity can have this attribute set to the given value
+                e = db._lookup_direct(datom.a, datom.v)
+                if e is not None:
+                    raise ValueError(f'cannot set unique attribute {datom.a!r} to {datom.v!r}, because this value is already assigned to entity {e}')
             lst.append(attr_def.value_type.mongo_encode(datom))
         return lst
 
@@ -356,14 +360,17 @@ class Database:
         else:
             attr = list(criteria.keys())[0]
             val = criteria[attr]
-            candidates = self._find_candidates(attr, val)
+            candidates = self._find_candidates(attr, val, return_all_attributes=True)
             results = self._filter_candidates(candidates, criteria)
         return results
 
-    def _find_candidates(self, attr, val):
+    def _find_candidates(self, attr, val, return_all_attributes=True):
         candidate_datoms = self._find_attribute_value(attr, val)
         candidate_entities = set(f.e for f in candidate_datoms)
-        candidate_datoms_all = self._facts_multi_entity(candidate_entities)
+        if return_all_attributes:
+            candidate_datoms_all = self._facts_multi_entity(candidate_entities)
+        else:
+            candidate_datoms_all = candidate_datoms
         candidate_datoms_all_by_e = {}
         for f in candidate_datoms_all:
             if f.e not in candidate_datoms_all_by_e:
