@@ -483,12 +483,13 @@ class Database:
             facts_dict = {e: [] for e in remaining_entities}
             if self._remote is not None:
                 r = self._remote
-                tx_max = r._tx_max
-                lst = r._conn._datoms.find({'e': {'$in': list(remaining_entities)}, 'tx': {'$lte': tx_max}})
-                for d in lst:
-                    f = ValueType.mongo_decode(d)
-                    facts.append(f)
-                    facts_dict[f.e].append(f)
+                if any(e <= r._e_max for e in remaining_entities):
+                    tx_max = r._tx_max
+                    lst = r._conn._datoms.find({'e': {'$in': list(remaining_entities)}, 'tx': {'$lte': tx_max}})
+                    for d in lst:
+                        f = ValueType.mongo_decode(d)
+                        facts.append(f)
+                        facts_dict[f.e].append(f)
 
             for f in self._with_tx.facts():
                 if f.e in remaining_entities:
@@ -553,6 +554,8 @@ class RemoteDatabase:
     def __init__(self, conn: Connection, tx_max: int):
         self._conn = conn
         self._tx_max = tx_max  # inclusive: tx <= tx_max
+        f = self._conn._datoms.find_one({'$query': {'tx': {'$lte': tx_max}}, '$orderby': {'e': -1}})
+        self._e_max = -1 if f is None else f['e']
 
 
 class LocalTransaction:
