@@ -327,8 +327,14 @@ class Database:
         # apply given datom to the database in the last local transaction (in-place)
         # this is useful for fast validation of a new set of facts
         self._with_tx[-1]._datoms.append(datom)
+
+        # if datom is about a defined attribute (an entity that has 'db/ident'), invalidate the attr_def_cache of that entity
+        for a, (e, _) in self._attr_def_cache.items():
+            if datom.e == e:
+                del self._attr_def_cache[a]
+                break
+
         # TODO: update caches instead of re-initializing them
-        self._attr_def_cache = {}
         self._attr_index = {}
         self._entity_index = {}
 
@@ -340,10 +346,10 @@ class Database:
             if len(self._attr_def_cache) == 0:
                 # init attr cache
                 result = self.find({'db/ident': None})
-                for _, d in result.items():
-                    self._attr_def_cache[d['db/ident']] = Attr.from_dict(d)
+                for e, d in result.items():
+                    self._attr_def_cache[d['db/ident']] = (e, Attr.from_dict(d))
             if name in self._attr_def_cache:
-                attr_def = self._attr_def_cache[name]
+                attr_def = self._attr_def_cache[name][1]
             else:
                 try:
                     e = self._lookup('db/ident', name)
@@ -351,7 +357,7 @@ class Database:
                     raise ValueError(f'attribute {name!r} is not defined')
                 dct = self.get(e)
                 attr_def = Attr.from_dict(dct)
-                self._attr_def_cache[name] = attr_def
+                self._attr_def_cache[name] = (e, attr_def)
         return attr_def
 
     def query(self, q):
