@@ -116,7 +116,7 @@ class Database:
         self._full_history = full_history
         self._attr_def_cache = {}  # cache of attributes for performance
         self._attr_index = {}  # cached datoms grouped by attribute: {a->AttributeIndex([datom where datom.a==a])}
-        self._entity_index = {}  # cached datoms grouped by entity: {e->EntityIndex([datom where datom.e==e])}  TODO: not yet implemented
+        self._entity_index = {}  # cached datoms grouped by entity: {e->EntityIndex([datom where datom.e==e])}
 
     @property
     def _remote_tx_max(self):
@@ -334,9 +334,17 @@ class Database:
                 del self._attr_def_cache[a]
                 break
 
-        # TODO: update caches instead of re-initializing them
-        self._attr_index = {}
-        self._entity_index = {}
+        # if datom is about an attribute in attribute index -> update this index
+        if datom.a in self._attr_index:
+            f = self._attr_index[datom.a].facts
+            f.append(datom)
+            self._attr_index[datom.a] = AttributeIndex(f)
+
+        # if datom is about an entity in entity index -> update this index
+        if datom.e in self._entity_index:
+            f = self._entity_index[datom.e].facts
+            f.append(datom)
+            self._entity_index[datom.e] = EntityIndex(f)
 
     def _get_attr_def(self, name: str) -> Attr:
         builtin_attr = Attr.builtin_dict()
@@ -463,19 +471,33 @@ class Database:
         return self._facts_multi_entity([entity])
 
     def _facts_multi_entity(self, entities: Collection):
-        if len(entities) == 0:
-            return []
         facts = []
-        if self._remote is not None:
-            r = self._remote
-            tx_max = r._tx_max
-            lst = r._conn._datoms.find({'e': {'$in': list(entities)}, 'tx': {'$lte': tx_max}})
-            for d in lst:
-                facts.append(ValueType.mongo_decode(d))
+        entities = set(entities)
+        remaining_entities = set(entities)
+        for e in entities:
+            if e in self._entity_index:
+                facts.extend(self._entity_index[e].facts)
+                remaining_entities = remaining_entities - {e}
 
-        for f in self._with_tx.facts():
-            if f.e in entities:
-                facts.append(f)
+        if len(remaining_entities) > 0:
+            facts_dict = {e: [] for e in remaining_entities}
+            if self._remote is not None:
+                r = self._remote
+                tx_max = r._tx_max
+                lst = r._conn._datoms.find({'e': {'$in': list(remaining_entities)}, 'tx': {'$lte': tx_max}})
+                for d in lst:
+                    f = ValueType.mongo_decode(d)
+                    facts.append(f)
+                    facts_dict[f.e].append(f)
+
+            for f in self._with_tx.facts():
+                if f.e in remaining_entities:
+                    facts.append(f)
+                    facts_dict[f.e].append(f)
+            
+            for e, f in facts_dict.items():
+                self._entity_index[e] = EntityIndex(f)
+        
         return facts
 
     def all_facts(self) -> list[Datom]:
@@ -600,3 +622,8 @@ class AttributeIndex:
         else:
             facts = []
         return facts
+
+
+class EntityIndex:
+    def __init__(self, facts):
+        self.facts = facts
