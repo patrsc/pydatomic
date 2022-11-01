@@ -150,8 +150,20 @@ class Attr(BaseModel):
     def is_ref(self):
         return self.value_type == ValueType.ref
 
+    def validate_ref(self, value, db):
+        if self.is_ref():
+            if not db._has_active_facts(value):
+                raise ValueError(f'entity {value} does not exist: a reference must point to a valid entity that has at least one attribute set')
+
     def is_unique(self):
         return self.unique in [Unique.identity, Unique.val]
+
+    def validate_uniqueness(self, value, op, db):
+        if op and self.is_unique():
+            # no other entity can have this attribute set to the given value
+            e = db._lookup_direct(self.ident, value)
+            if e is not None:
+                raise ValueError(f'cannot set unique attribute {self.ident!r} to {value!r}, because this value is already assigned to entity {e}')
 
     def validate_restricted_values(self, value: Any):
         if self.restricted_values is not None:

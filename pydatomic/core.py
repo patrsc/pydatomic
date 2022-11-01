@@ -297,25 +297,40 @@ class Database:
 
     def _validate_transaction(self, tx_data):
         lst = []
-        for i, datom in enumerate(tx_data):
-            tx = self._with_tx.append(LocalTransaction(tx_data[0:i]))
-            db = Database(remote=self._remote, tx_min=-1, with_tx=tx, full_history=False)
+        db = self._applicative_copy()
+        for datom in tx_data:
             # given db, check if is adding datom is a valid operation
-            attr_def = db._get_attr_def(datom.a)
-            attr_def.validate_value(datom.v)
-            if attr_def.is_ref():
-                if not db._has_active_facts(datom.v):
-                    raise ValueError(f'entity {datom.v} does not exist: a reference must point to a valid entity that has at least one attribute set')
-            data = db.get(datom.e)
-            existing_value = None if datom.a not in data else data[datom.a]
-            attr_def.validate_cardinality(datom.e, datom.v, datom.op, existing_value)
-            if datom.op and attr_def.is_unique():
-                # no other entity can have this attribute set to the given value
-                e = db._lookup_direct(datom.a, datom.v)
-                if e is not None:
-                    raise ValueError(f'cannot set unique attribute {datom.a!r} to {datom.v!r}, because this value is already assigned to entity {e}')
+            attr_def = db._validate_datom(datom)
+            # apply datom to db
+            db._apply_datom(datom)
             lst.append(attr_def.value_type.mongo_encode(datom))
         return lst
+    
+    def _validate_datom(self, datom):
+        # validate that a single new datom is valid if added at the end of the current db
+        attr_def = self._get_attr_def(datom.a)
+        attr_def.validate_value(datom.v)
+        attr_def.validate_ref(datom.v, self)
+        data = self.get(datom.e)
+        existing_value = None if datom.a not in data else data[datom.a]
+        attr_def.validate_cardinality(datom.e, datom.v, datom.op, existing_value)
+        attr_def.validate_uniqueness(datom.v, datom.op, self)
+        return attr_def
+
+    def _applicative_copy(self):
+        # return a new database with an empty (mutable) transaction at the end that can be subsequently filled using the _apply_datom function
+        # this is useful for fast validation of a new set of facts
+        tx = self._with_tx.append(LocalTransaction([])) # empty local transaction at the end
+        return Database(remote=self._remote, tx_min=-1, with_tx=tx, full_history=False)
+
+    def _apply_datom(self, datom):
+        # apply given datom to the database in the last local transaction (in-place)
+        # this is useful for fast validation of a new set of facts
+        self._with_tx[-1]._datoms.append(datom)
+        # TODO: update caches instead of re-initializing them
+        self._attr_def_cache = {}
+        self._attr_index = {}
+        self._entity_index = {}
 
     def _get_attr_def(self, name: str) -> Attr:
         builtin_attr = Attr.builtin_dict()
