@@ -304,8 +304,7 @@ class Database:
             attr_def = db._get_attr_def(datom.a)
             attr_def.validate_value(datom.v)
             if attr_def.is_ref():
-                d = db.get(datom.v)
-                if d == {}:
+                if not db._has_active_facts(datom.v):
                     raise ValueError(f'entity {datom.v} does not exist: a reference must point to a valid entity that has at least one attribute set')
             data = db.get(datom.e)
             existing_value = None if datom.a not in data else data[datom.a]
@@ -402,19 +401,26 @@ class Database:
         return self._get_from_facts(facts)
 
     def _get_from_facts(self, facts: list[Datom]):
+        active_facts = self._get_active_facts(facts)
+        return self._active_facts_to_dict(active_facts)
+
+    def _get_active_facts(self, facts: list[Datom]):
         active_facts = []
         for f in facts:
             if f.op:
                 active_facts.append((f.a, f.v))
             else:
                 active_facts.remove((f.a, f.v))
-        return self._active_facts_to_dict(active_facts)
+        return active_facts
+    
+    def _has_active_facts(self, entity):
+        facts = self.facts(entity)
+        active_facts = self._get_active_facts(facts)
+        return len(active_facts) > 0
     
     def _active_facts_to_dict(self, active_facts: list[tuple[str, Any]]):
         d = {}
-        for f in active_facts:
-            a = f[0]
-            v = f[1]
+        for a, v in active_facts:
             attr = self._get_attr_def(a)
             if attr.cardinality == Cardinality.one:
                 d[a] = v
