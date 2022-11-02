@@ -1,5 +1,4 @@
 from pymongo import MongoClient, InsertOne
-from fastapi.encoders import jsonable_encoder
 from typing import Collection, Optional, Union, Any
 from .facts import Facts, Datom
 from .util import now, datetime, datetime_to_int
@@ -143,10 +142,9 @@ class Database:
             tx_max = r._tx_max
             d = r._conn._datoms.find_one({'$query': {'tx': {'$lte': tx_max}}, '$orderby': {key: -1}})
             v = -1 if d is None else d[key]
-        for f in self._with_datoms.facts():
-            vf = jsonable_encoder(f)[key]
-            if vf > v:
-                v = vf
+        vf = self._with_datoms.max_key(key)
+        if vf > v:
+            v = vf
         return v
 
     def entities(self):
@@ -557,22 +555,13 @@ class RemoteDatabase:
 
 
 class LocalDatoms:
-    """represents a list of datoms (along with some indices for efficient access), not transmitted to a remote database"""
+    """represents a list of datoms (along with some caches/indexed for efficient access), not transmitted to a remote database"""
 
     def __init__(self, facts: list[Datom]) -> None:
         self._datoms: list[Datom] = facts
-
-    def transactions(self):
-        """returns a dict {tx_id->list[Datom]} where all datoms are grouped by transaction id"""
-        d = {}
-        for f in self._datoms:
-            if f.tx not in d:
-                d[f.tx] = []
-            d[f.tx].append(f)
-        return d
-
-    def num_transactions(self):
-        return len(self.transactions())
+        self._cache_tx_max = None
+        self._cache_e_max = None
+        self._cache_id_max = None
     
     def facts(self):
         """iterate over all datoms"""
@@ -583,7 +572,9 @@ class LocalDatoms:
         return len(self._datoms)
 
     def tx_max(self):
-        return max(f.tx for f in self._datoms)
+        if self._cache_tx_max is None:
+            self._cache_tx_max = max_default((f.tx for f in self._datoms), -1)
+        return self._cache_tx_max
 
     def append(self, facts: list[Datom]):
         """return a new LocalDatoms object with a set of appended facts"""
@@ -592,8 +583,14 @@ class LocalDatoms:
         return LocalDatoms(f)
 
     def append_fact(self, datom: Datom):
-        """append a single fact in-place, mutating the object"""
+        """append a single fact in-place, mutating the object and updating all caches"""
         self._datoms.append(datom)
+        if self._cache_tx_max is not None and datom.tx > self._cache_tx_max:
+            self._cache_tx_max = datom.tx
+        if self._cache_e_max is not None and datom.e > self._cache_e_max:
+            self._cache_e_max = datom.e
+        if self._cache_id_max is not None and datom.id > self._cache_id_max:
+            self._cache_id_max = datom.id
 
     def as_of(self, tx_id: int):
         """return a new LocalDatoms object with only datoms d where d.tx <= tx_id"""
@@ -602,6 +599,15 @@ class LocalDatoms:
             if f.tx <= tx_id:
                 facts.append(f)
         return LocalDatoms(facts)
+    
+    def max_key(self, key):
+        if key not in ['e', '_id']:
+            raise ValueError(f'unsupported key: {key}')
+        if self._cache_e_max is None or self._cache_id_max is None:
+            self._cache_e_max = max_default((f.e for f in self._datoms), -1)
+            self._cache_id_max = max_default((f.id for f in self._datoms), -1)
+        v = {'e': self._cache_e_max, '_id': self._cache_id_max}
+        return v[key]
 
 
 class AttributeIndex:
@@ -625,3 +631,11 @@ class AttributeIndex:
 class EntityIndex:
     def __init__(self, facts):
         self.facts = facts
+
+
+def max_default(seq, default_value):
+    m = default_value
+    for v in seq:
+        if v > m:
+            m = v
+    return m
