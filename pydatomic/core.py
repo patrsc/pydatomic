@@ -79,7 +79,7 @@ class Connection:
         d = self._datoms.find_one({'$query': {}, '$orderby': {'tx': -1}})
         tx_max = -1 if d is None else d['tx']
         r = RemoteDatabase(self, tx_max)
-        return Database(remote=r, tx_min=-1, with_tx=None, full_history=False)
+        return Database(remote=r, tx_min=-1, with_datoms=None, full_history=False)
     
     def transact(self, facts: Facts) -> tuple['Database', 'Database', list[Datom], dict[str,int]]:
         """transact a new set of facts to the database on the server
@@ -104,15 +104,15 @@ class Connection:
 class Database:
     """represents a database value"""
 
-    def __init__(self, remote: Optional['RemoteDatabase'] = None, tx_min: int = -1, with_tx: Optional['LocalTransactionList'] = None, full_history=False) -> None:
+    def __init__(self, remote: Optional['RemoteDatabase'] = None, tx_min: int = -1, with_datoms: Optional['LocalDatoms'] = None, full_history=False) -> None:
         """create a new Database object from scratch (use this only without arguments to create a new standalone database
         that is not connected to a server, use Connection.db to get the Database value of a server)
         """
-        if with_tx is None:
-            with_tx = LocalTransactionList([])
+        if with_datoms is None:
+            with_datoms = LocalDatoms([])
         self._remote = remote  # if None, this is a virtual db assuming an empty remote database
         self._tx_min = tx_min  # exclusive: tx > tx_min
-        self._with_tx = with_tx  # transaction ids monotonically increasing
+        self._with_datoms: LocalDatoms = with_datoms
         self._full_history = full_history
         self._attr_def_cache = {}  # cache of attributes for performance
         self._attr_index = {}  # cached datoms grouped by attribute: {a->AttributeIndex([datom where datom.a==a])}
@@ -124,8 +124,8 @@ class Database:
 
     @property
     def _tx_max(self):
-        if len(self._with_tx) > 0:
-            return self._with_tx[-1].tx_id()
+        if len(self._with_datoms) > 0:
+            return self._with_datoms.tx_max()
         else:
             return self._remote_tx_max
 
@@ -143,7 +143,7 @@ class Database:
             tx_max = r._tx_max
             d = r._conn._datoms.find_one({'$query': {'tx': {'$lte': tx_max}}, '$orderby': {key: -1}})
             v = -1 if d is None else d[key]
-        for f in self._with_tx.facts():
+        for f in self._with_datoms.facts():
             vf = jsonable_encoder(f)[key]
             if vf > v:
                 v = vf
@@ -177,7 +177,7 @@ class Database:
             docs = r._conn._datoms.find({'a': attribute, 'tx': {'$lte': tx_max}})
             for d in docs:
                 facts.append(ValueType.mongo_decode(d))
-        for f in self._with_tx.facts():
+        for f in self._with_datoms.facts():
             match = f.a == attribute
             if match:
                 facts.append(f)
@@ -260,20 +260,18 @@ class Database:
             raise ValueError('cannot travel into the future')
         if tx_id > self._remote_tx_max:
             r = self._remote
-            indices = [i for i, t in enumerate(self._with_tx._tx) if t.tx_id() == tx_id]
-            n = indices[0]
-            tx = self._with_tx.range(0, n+1)
+            f = self._with_datoms.as_of(tx_id)
         else:
             r = None if self._remote is None else RemoteDatabase(self._remote._conn, tx_id)
-            tx = None
-        return Database(remote=r, tx_min=-1, with_tx=tx, full_history=False)
+            f = None
+        return Database(remote=r, tx_min=-1, with_datoms=f, full_history=False)
 
     def since(self, tx_id) -> 'Database':
         """returns a database value after a point in time represented by a transaction ID
         :param tx_id: the transaction ID (exclusive)
         :return: the database value with transactions tx > tx_id
         """
-        return Database(remote=self._remote, tx_min=tx_id, with_tx=self._with_tx, full_history=False)
+        return Database(remote=self._remote, tx_min=tx_id, with_datoms=self._with_datoms, full_history=False)
 
     def history(self) -> 'Database':
         """returns a history database value of the given database value
@@ -281,18 +279,18 @@ class Database:
         to get all historic facts the functions Database.facts and Database.all_facts can be used on both history databases and normal databases)
         :return: the database value with history
         """
-        return Database(remote=self._remote, tx_min=self._tx_min, with_tx=self._with_tx, full_history=True)
+        return Database(remote=self._remote, tx_min=self._tx_min, with_datoms=self._with_datoms, full_history=True)
 
     def as_if(self, facts: Facts) -> tuple['Database', 'Database', list[Datom], dict[str,int]]:
         """returns a database value with added facts that are not transacted to a remote database, 
         but only visible locally (this function is called `with` in Datomic)
 
         This function has the same interface as Connection.transact"""
-        db_before = Database(remote=self._remote, tx_min=-1, with_tx=self._with_tx, full_history=False)
+        db_before = Database(remote=self._remote, tx_min=-1, with_datoms=self._with_datoms, full_history=False)
         tx_data, temp_ids = db_before._transaction_data(facts)
         db_before._validate_transaction(tx_data)
-        tx = self._with_tx.append(LocalTransaction(tx_data))
-        db_after = Database(remote=self._remote, tx_min=-1, with_tx=tx, full_history=False)
+        with_datoms = self._with_datoms.append(tx_data)
+        db_after = Database(remote=self._remote, tx_min=-1, with_datoms=with_datoms, full_history=False)
         return db_before, db_after, tx_data, temp_ids
 
     def _validate_transaction(self, tx_data):
@@ -318,15 +316,15 @@ class Database:
         return attr_def
 
     def _applicative_copy(self):
-        # return a new database with an empty (mutable) transaction at the end that can be subsequently filled using the _apply_datom function
+        # return a new database that can be subsequently filled using the _apply_datom function
         # this is useful for fast validation of a new set of facts
-        tx = self._with_tx.append(LocalTransaction([])) # empty local transaction at the end
-        return Database(remote=self._remote, tx_min=-1, with_tx=tx, full_history=False)
+        d = self._with_datoms.append([])
+        return Database(remote=self._remote, tx_min=-1, with_datoms=d, full_history=False)
 
     def _apply_datom(self, datom):
         # apply given datom to the database in the last local transaction (in-place)
         # this is useful for fast validation of a new set of facts
-        self._with_tx[-1]._datoms.append(datom)
+        self._with_datoms.append_fact(datom)
 
         # if datom is about a defined attribute (an entity that has 'db/ident'), invalidate the attr_def_cache of that entity
         for a, (e, _) in self._attr_def_cache.items():
@@ -491,7 +489,7 @@ class Database:
                         facts.append(f)
                         facts_dict[f.e].append(f)
 
-            for f in self._with_tx.facts():
+            for f in self._with_datoms.facts():
                 if f.e in remaining_entities:
                     facts.append(f)
                     facts_dict[f.e].append(f)
@@ -558,55 +556,52 @@ class RemoteDatabase:
         self._e_max = -1 if f is None else f['e']
 
 
-class LocalTransaction:
-    """represents a local transaction, not transmitted to a remote database"""
+class LocalDatoms:
+    """represents a list of datoms (along with some indices for efficient access), not transmitted to a remote database"""
 
-    def __init__(self, tx_data: list[Datom]) -> None:
-        self._datoms: list[Datom] = tx_data
+    def __init__(self, facts: list[Datom]) -> None:
+        self._datoms: list[Datom] = facts
+
+    def transactions(self):
+        """returns a dict {tx_id->list[Datom]} where all datoms are grouped by transaction id"""
+        d = {}
+        for f in self._datoms:
+            if f.tx not in d:
+                d[f.tx] = []
+            d[f.tx].append(f)
+        return d
+
+    def num_transactions(self):
+        return len(self.transactions())
     
-    def tx_id(self):
-        return self._datoms[0].tx
-
     def facts(self):
-        """iterate over datoms"""
+        """iterate over all datoms"""
         for f in self._datoms:
             yield f
-    
+
     def __len__(self):
         return len(self._datoms)
 
+    def tx_max(self):
+        return max(f.tx for f in self._datoms)
 
-class LocalTransactionList:
-    """represents a local transactions"""
+    def append(self, facts: list[Datom]):
+        """return a new LocalDatoms object with a set of appended facts"""
+        f = self._datoms.copy()
+        f.extend(facts)
+        return LocalDatoms(f)
 
-    def __init__(self, tx: list[LocalTransaction]) -> None:
-        self._tx = tx
+    def append_fact(self, datom: Datom):
+        """append a single fact in-place, mutating the object"""
+        self._datoms.append(datom)
 
-    def transactions(self):
-        """iterate over transactions"""
-        for t in self._tx:
-            yield t
-
-    def facts(self):
-        """iterate over datoms"""
-        for t in self._tx:
-            for f in t.facts():
-                yield f
-
-    def append(self, tx: LocalTransaction):
-        """return new LocalTransactionList object with an appended LocalTransaction"""
-        tx_list = self._tx.copy()
-        tx_list.append(tx)
-        return LocalTransactionList(tx_list)
-
-    def __len__(self):
-        return len(self._tx)
-
-    def __getitem__(self, index: int) -> LocalTransaction:
-        return self._tx[index]
-
-    def range(self, start: int, stop: int) -> 'LocalTransactionList':
-        return LocalTransactionList(self._tx[start:stop])
+    def as_of(self, tx_id: int):
+        """return a new LocalDatoms object with only datoms d where d.tx <= tx_id"""
+        facts = []
+        for f in self._datoms:
+            if f.tx <= tx_id:
+                facts.append(f)
+        return LocalDatoms(facts)
 
 
 class AttributeIndex:
