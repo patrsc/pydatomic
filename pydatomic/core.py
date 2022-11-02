@@ -560,6 +560,8 @@ class LocalDatoms:
         self._cache_tx_max = None
         self._cache_e_max = None
         self._cache_id_max = None
+        self._cache_a_index = None
+        self._cache_e_index = None
     
     def facts(self):
         """iterate over all datoms"""
@@ -567,20 +569,24 @@ class LocalDatoms:
             yield f
 
     def facts_by_attribute(self, attribute):
-        # TODO: use index
-        facts = []
-        for f in self._datoms:
-            if f.a == attribute:
-                facts.append(f)
-        return facts
+        if self._cache_a_index is None:
+            d = {}
+            for f in self._datoms:
+                if f.a not in d:
+                    d[f.a] = []
+                d[f.a].append(f)
+            self._cache_a_index = d
+        return self._cache_a_index[attribute] if attribute in self._cache_a_index else []
 
     def facts_by_entity(self, entity):
-        # TODO: use index
-        facts = []
-        for f in self._datoms:
-            if f.e == entity:
-                facts.append(f)
-        return facts
+        if self._cache_e_index is None:
+            d = {}
+            for f in self._datoms:
+                if f.e not in d:
+                    d[f.e] = []
+                d[f.e].append(f)
+            self._cache_e_index = d
+        return self._cache_e_index[entity] if entity in self._cache_e_index else []
 
     def __len__(self):
         return len(self._datoms)
@@ -605,6 +611,16 @@ class LocalDatoms:
             self._cache_e_max = datom.e
         if self._cache_id_max is not None and datom.id > self._cache_id_max:
             self._cache_id_max = datom.id
+        if self._cache_a_index is not None:
+            if datom.a not in self._cache_a_index:
+                self._cache_a_index[datom.a] = [datom]
+            else:
+                self._cache_a_index[datom.a].append(datom)
+        if self._cache_e_index is not None:
+            if datom.e not in self._cache_e_index:
+                self._cache_e_index[datom.e] = [datom]
+            else:
+                self._cache_e_index[datom.e].append(datom)
 
     def as_of(self, tx_id: int):
         """return a new LocalDatoms object with only datoms d where d.tx <= tx_id"""
