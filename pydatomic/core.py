@@ -297,7 +297,8 @@ class Database:
             attr_def = db._validate_datom(datom)
             # apply datom to db
             db._apply_datom(datom)
-            lst.append(attr_def.value_type.mongo_encode(datom))
+            value_mongo = attr_def.value_type.mongo_encode(datom)
+            lst.append(value_mongo)
         return lst
     
     def _validate_datom(self, datom):

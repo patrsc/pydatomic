@@ -4,7 +4,6 @@ from pydantic import BaseModel, root_validator
 from typing import Optional, Any
 from .facts import Datom
 from bson.int64 import Int64
-from fastapi.encoders import jsonable_encoder
 from .util import datetime, int_to_datetime, datetime_to_int
 import uuid
 from rfc3986 import is_valid_uri
@@ -68,7 +67,9 @@ class ValueType(Enum):
         return v
 
     def mongo_encode(self, datom: Datom) -> dict[str,Any]:
-        d = jsonable_encoder(datom)
+        d = datom.dict()
+        d['_id'] = d['id']
+        del d['id']
         for k in ['_id', 'e', 'tx']:
             d[k] = Int64(d[k])
         d['v'] = self.mongo_encode_value(d['v'])
