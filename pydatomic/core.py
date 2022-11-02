@@ -175,10 +175,8 @@ class Database:
             docs = r._conn._datoms.find({'a': attribute, 'tx': {'$lte': tx_max}})
             for d in docs:
                 facts.append(ValueType.mongo_decode(d))
-        for f in self._with_datoms.facts():
-            match = f.a == attribute
-            if match:
-                facts.append(f)
+        for f in self._with_datoms.facts_by_attribute(attribute):
+            facts.append(f)
         return AttributeIndex(facts)
 
     def _find_attribute_value(self, attribute: str, value: Any) -> list[Datom]:
@@ -487,14 +485,14 @@ class Database:
                         facts.append(f)
                         facts_dict[f.e].append(f)
 
-            for f in self._with_datoms.facts():
-                if f.e in remaining_entities:
+            for e in remaining_entities:
+                for f in self._with_datoms.facts_by_entity(e):
                     facts.append(f)
-                    facts_dict[f.e].append(f)
-            
+                    facts_dict[e].append(f)
+
             for e, f in facts_dict.items():
                 self._entity_index[e] = EntityIndex(f)
-        
+
         return facts
 
     def all_facts(self) -> list[Datom]:
@@ -567,6 +565,22 @@ class LocalDatoms:
         """iterate over all datoms"""
         for f in self._datoms:
             yield f
+
+    def facts_by_attribute(self, attribute):
+        # TODO: use index
+        facts = []
+        for f in self._datoms:
+            if f.a == attribute:
+                facts.append(f)
+        return facts
+
+    def facts_by_entity(self, entity):
+        # TODO: use index
+        facts = []
+        for f in self._datoms:
+            if f.e == entity:
+                facts.append(f)
+        return facts
 
     def __len__(self):
         return len(self._datoms)
