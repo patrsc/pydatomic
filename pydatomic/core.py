@@ -128,6 +128,7 @@ class Database:
         self._attr_index = {}  # cached datoms grouped by attribute: {a->Index([datom where datom.a==a])}
         self._attr_val_index = {}  # cached datoms grouped by attribute/value: {a->v->Index([datom where datom.a==a and datom.v==v])}
         self._entity_index = {}  # cached datoms grouped by entity: {e->Index([datom where datom.e==e])}
+        self._attr_val_index_complete = False
 
     @property
     def _remote_tx_max(self):
@@ -214,17 +215,21 @@ class Database:
                 self._attr_index[attribute] = self._get_attr_index(attribute, None)
                 # create attribute/value index from attribute index
                 self._attr_val_index[attribute] = self._get_attr_val_index_from_attr_index(self._attr_index[attribute])
+                self._attr_val_index_complete = True
         else:
             if attribute not in self._attr_val_index:
                 self._attr_val_index[attribute] = {}
-            if value not in self._attr_val_index[attribute]:
+            if not self._attr_val_index_complete and value not in self._attr_val_index[attribute]:
                 self._attr_val_index[attribute][value] = self._get_attr_index(attribute, value)
         
         # use index to filter attribute datoms
         if value is None:
             facts = self._attr_index[attribute].facts.copy()
         else:
-            facts = self._attr_val_index[attribute][value].facts.copy()
+            if value in self._attr_val_index[attribute]:
+                facts = self._attr_val_index[attribute][value].facts.copy()
+            else:
+                facts = []
         return facts
 
     def _lookup(self, attribute, value) -> int:
