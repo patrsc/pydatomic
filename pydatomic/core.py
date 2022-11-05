@@ -114,8 +114,9 @@ class Database:
         self._with_datoms: LocalDatoms = with_datoms
         self._full_history = full_history
         self._attr_def_cache = {}  # cache of attributes for performance
-        self._attr_index = {}  # cached datoms grouped by attribute: {a->AttributeIndex([datom where datom.a==a])}
-        self._entity_index = {}  # cached datoms grouped by entity: {e->EntityIndex([datom where datom.e==e])}
+        self._attr_index = {}  # cached datoms grouped by attribute: {a->Index([datom where datom.a==a])}
+        self._attr_val_index = {}  # cached datoms grouped by attribute/value: {a->v->Index([datom where datom.a==a and datom.v==v])}
+        self._entity_index = {}  # cached datoms grouped by entity: {e->Index([datom where datom.e==e])}
 
     @property
     def _remote_tx_max(self):
@@ -167,29 +168,52 @@ class Database:
                 tx_id = f.tx
         return tx_id
 
-    def _get_attr_index(self, attribute: str):
+    def _get_attr_index(self, attribute: str, value):
         facts = []
         if self._remote is not None:
             r = self._remote
             tx_max = r._tx_max
-            docs = r._conn._datoms.find({'a': attribute, 'tx': {'$lte': tx_max}})
+            if value is None:
+                docs = r._conn._datoms.find({'a': attribute, 'tx': {'$lte': tx_max}})
+            else:
+                docs = r._conn._datoms.find({'a': attribute, 'v': value, 'tx': {'$lte': tx_max}})
             for d in docs:
                 facts.append(ValueType.mongo_decode(d))
-        for f in self._with_datoms.facts_by_attribute(attribute):
-            facts.append(f)
-        return AttributeIndex(facts)
+        if value is None:
+            for f in self._with_datoms.facts_by_attribute(attribute):
+                facts.append(f)
+        else:
+            for f in self._with_datoms.facts_by_attribute_value(attribute, value):
+                facts.append(f)
+        return Index(facts)
+
+    def _get_attr_val_index_from_attr_index(self, attr_index: 'Index'):
+        values = {}
+        for f in attr_index.facts:
+            if f.v not in values:
+                values[f.v] = Index([])
+            values[f.v].facts.append(f)
+        return values
 
     def _find_attribute_value(self, attribute: str, value: Any) -> list[Datom]:
         """return all facts with given (attribute, value) pair, if value is None it finds the attribute with any value"""
-        if attribute not in self._attr_index:
-            # add attribute to index for fast future attribute lookup
-            self._attr_index[attribute] = self._get_attr_index(attribute)
-        # use index to filter attribute datoms
-        index: AttributeIndex = self._attr_index[attribute]
         if value is None:
-            facts = index.facts.copy()
+            if attribute not in self._attr_index:
+                # add attribute to index for fast future attribute lookup
+                self._attr_index[attribute] = self._get_attr_index(attribute, None)
+                # create attribute/value index from attribute index
+                self._attr_val_index[attribute] = self._get_attr_val_index_from_attr_index(self._attr_index[attribute])
         else:
-            facts = index.facts_where(value)
+            if attribute not in self._attr_val_index:
+                self._attr_val_index[attribute] = {}
+            if value not in self._attr_val_index[attribute]:
+                self._attr_val_index[attribute][value] = self._get_attr_index(attribute, value)
+        
+        # use index to filter attribute datoms
+        if value is None:
+            facts = self._attr_index[attribute].facts.copy()
+        else:
+            facts = self._attr_val_index[attribute][value].facts.copy()
         return facts
 
     def _lookup(self, attribute, value) -> int:
@@ -333,13 +357,19 @@ class Database:
         if datom.a in self._attr_index:
             f = self._attr_index[datom.a].facts
             f.append(datom)
-            self._attr_index[datom.a] = AttributeIndex(f)
+            self._attr_index[datom.a] = Index(f)
+
+        # if datom is about an attribute in attribute/value index -> update this index
+        if datom.a in self._attr_val_index and datom.v in self._attr_val_index[datom.a]:
+            f = self._attr_val_index[datom.a][datom.v].facts
+            f.append(datom)
+            self._attr_val_index[datom.a][datom.v] = Index(f)
 
         # if datom is about an entity in entity index -> update this index
         if datom.e in self._entity_index:
             f = self._entity_index[datom.e].facts
             f.append(datom)
-            self._entity_index[datom.e] = EntityIndex(f)
+            self._entity_index[datom.e] = Index(f)
 
     def _get_attr_def(self, name: str) -> Attr:
         builtin_attr = Attr.builtin_dict()
@@ -492,7 +522,7 @@ class Database:
                     facts_dict[e].append(f)
 
             for e, f in facts_dict.items():
-                self._entity_index[e] = EntityIndex(f)
+                self._entity_index[e] = Index(f)
 
         return facts
 
@@ -554,7 +584,7 @@ class RemoteDatabase:
 
 
 class LocalDatoms:
-    """represents a list of datoms (along with some caches/indexed for efficient access), not transmitted to a remote database"""
+    """represents a list of datoms (along with some caches/indexes for efficient access), not transmitted to a remote database"""
 
     def __init__(self, facts: list[Datom]) -> None:
         self._datoms: list[Datom] = facts
@@ -562,6 +592,7 @@ class LocalDatoms:
         self._cache_e_max = None
         self._cache_id_max = None
         self._cache_a_index = None
+        self._cache_av_index = None
         self._cache_e_index = None
     
     def facts(self):
@@ -578,6 +609,24 @@ class LocalDatoms:
                 d[f.a].append(f)
             self._cache_a_index = d
         return self._cache_a_index[attribute] if attribute in self._cache_a_index else []
+
+    def facts_by_attribute_value(self, attribute, value):
+        if self._cache_av_index is None:
+            d = {}
+            for f in self._datoms:
+                if f.a not in d:
+                    d[f.a] = {}
+                if f.v not in d[f.a]:
+                    d[f.a][f.v] = []
+                d[f.a][f.v].append(f)
+            self._cache_av_index = d
+        if attribute in self._cache_av_index:
+            if value in self._cache_av_index[attribute]:
+                return self._cache_av_index[attribute][value]
+            else:
+                return []
+        else:
+            return []
 
     def facts_by_entity(self, entity):
         if self._cache_e_index is None:
@@ -614,14 +663,18 @@ class LocalDatoms:
             self._cache_id_max = datom.id
         if self._cache_a_index is not None:
             if datom.a not in self._cache_a_index:
-                self._cache_a_index[datom.a] = [datom]
-            else:
-                self._cache_a_index[datom.a].append(datom)
+                self._cache_a_index[datom.a] = []
+            self._cache_a_index[datom.a].append(datom)
+        if self._cache_av_index is not None:
+            if datom.a not in self._cache_av_index:
+                self._cache_av_index[datom.a] = {}
+            if datom.v not in self._cache_av_index[datom.a]:
+                self._cache_av_index[datom.a][datom.v] = []
+            self._cache_av_index[datom.a][datom.v].append(datom)
         if self._cache_e_index is not None:
             if datom.e not in self._cache_e_index:
-                self._cache_e_index[datom.e] = [datom]
-            else:
-                self._cache_e_index[datom.e].append(datom)
+                self._cache_e_index[datom.e] = []
+            self._cache_e_index[datom.e].append(datom)
 
     def as_of(self, tx_id: int):
         """return a new LocalDatoms object with only datoms d where d.tx <= tx_id"""
@@ -641,25 +694,7 @@ class LocalDatoms:
         return v[key]
 
 
-class AttributeIndex:
-    def __init__(self, facts):
-        self.facts = facts  # all facts about a single attribute
-        self.values = {}  # dict of values mapping to indices in facts where the value occurs
-        for i, f in enumerate(facts):
-            if f.v not in self.values:
-                self.values[f.v] = []
-            self.values[f.v].append(i)
-
-    def facts_where(self, value):
-        """return the facts where f.v == value"""
-        if value in self.values:
-            facts = [self.facts[i] for i in self.values[value]]
-        else:
-            facts = []
-        return facts
-
-
-class EntityIndex:
+class Index:
     def __init__(self, facts):
         self.facts = facts
 
