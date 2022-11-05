@@ -1,4 +1,4 @@
-from pymongo import MongoClient, InsertOne
+from pymongo import MongoClient, InsertOne, ASCENDING
 from typing import Collection, Optional, Union, Any
 from .facts import Facts, Datom
 from .util import now, datetime, datetime_to_int
@@ -28,6 +28,7 @@ class Client:
         if db_name in self.list_databases():
             raise ValueError(f'database {db_name} already exists')
         self._client[db_name].create_collection('datoms')
+        self._create_indices(db_name)
 
     def delete_database(self, db_name: str):
         """delete an existing database on the server
@@ -54,6 +55,7 @@ class Client:
         """
         if db_name not in self.list_databases():
             raise ValueError(f'database {db_name} does not exist')
+        self._create_indices(db_name)
         return Connection(self, db_name)
 
     def close(self):
@@ -62,6 +64,15 @@ class Client:
 
     def __del__(self):
         self.close()
+    
+    def _create_indices(self, db_name):
+        coll = self._client[db_name]['datoms']
+        indexes = coll.index_information()
+        for name in ['e', 'a', 'tx']:
+            if name not in indexes:
+                coll.create_index([(name, ASCENDING)], name=name, background=True)
+        if 'av' not in indexes:
+            coll.create_index([('a', ASCENDING), ('v', ASCENDING)], name='av', background=True)
 
 
 class Connection:
