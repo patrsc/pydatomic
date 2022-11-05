@@ -128,7 +128,7 @@ class Database:
         self._attr_index = {}  # cached datoms grouped by attribute: {a->Index([datom where datom.a==a])}
         self._attr_val_index = {}  # cached datoms grouped by attribute/value: {a->v->Index([datom where datom.a==a and datom.v==v])}
         self._entity_index = {}  # cached datoms grouped by entity: {e->Index([datom where datom.e==e])}
-        self._attr_val_index_complete = False
+        self._attr_val_index_complete = set()  # set of attributes for which the attr_val_index is complete
 
     @property
     def _remote_tx_max(self):
@@ -215,11 +215,11 @@ class Database:
                 self._attr_index[attribute] = self._get_attr_index(attribute, None)
                 # create attribute/value index from attribute index
                 self._attr_val_index[attribute] = self._get_attr_val_index_from_attr_index(self._attr_index[attribute])
-                self._attr_val_index_complete = True
+                self._attr_val_index_complete.add(attribute)
         else:
             if attribute not in self._attr_val_index:
                 self._attr_val_index[attribute] = {}
-            if not self._attr_val_index_complete and value not in self._attr_val_index[attribute]:
+            if attribute not in self._attr_val_index_complete and value not in self._attr_val_index[attribute]:
                 self._attr_val_index[attribute][value] = self._get_attr_index(attribute, value)
         
         # use index to filter attribute datoms
@@ -376,10 +376,14 @@ class Database:
             self._attr_index[datom.a] = Index(f)
 
         # if datom is about an attribute in attribute/value index -> update this index
-        if datom.a in self._attr_val_index and datom.v in self._attr_val_index[datom.a]:
-            f = self._attr_val_index[datom.a][datom.v].facts
-            f.append(datom)
-            self._attr_val_index[datom.a][datom.v] = Index(f)
+        if datom.a in self._attr_val_index:
+            if datom.v in self._attr_val_index[datom.a]:
+                f = self._attr_val_index[datom.a][datom.v].facts
+                f.append(datom)
+                self._attr_val_index[datom.a][datom.v] = Index(f)
+            else:
+                if datom.a in self._attr_val_index_complete:
+                    self._attr_val_index[datom.a][datom.v] = Index([datom])
 
         # if datom is about an entity in entity index -> update this index
         if datom.e in self._entity_index:
