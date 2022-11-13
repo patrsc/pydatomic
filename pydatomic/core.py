@@ -518,11 +518,12 @@ class Database:
     def _facts_multi_entity(self, entities: Collection):
         facts = []
         entities = set(entities)
-        remaining_entities = set(entities)
+        indexed_entities = []
         for e in entities:
             if e in self._entity_index:
                 facts.extend(self._entity_index[e].facts)
-                remaining_entities = remaining_entities - {e}
+                indexed_entities.append(e)
+        remaining_entities = entities - set(indexed_entities)
 
         if len(remaining_entities) > 0:
             facts_dict = {e: [] for e in remaining_entities}
